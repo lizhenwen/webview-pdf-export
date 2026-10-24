@@ -1,11 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-const CHANNELS = new Set(['pdf-list', 'toast', 'inline-pdf', 'nav-command']);
+const CHANNELS = new Set(['pdf-list', 'toast', 'inline-pdf', 'nav-command', 'history-list']);
 
 contextBridge.exposeInMainWorld('pdfApp', {
+  listHistory: () => ipcRenderer.invoke('list-history'),
+  removeHistory: (id) => ipcRenderer.invoke('remove-history', id),
+  clearHistory: () => ipcRenderer.invoke('clear-history'),
   listPdfs: () => ipcRenderer.invoke('list-pdfs'),
   getInlinePdf: () => ipcRenderer.invoke('get-inline-pdf'),
-  getSampleUrl: () => ipcRenderer.invoke('get-sample-url'),
   exportPdf: (id) => ipcRenderer.invoke('export-pdf', id),
   exportAll: () => ipcRenderer.invoke('export-all'),
   exportInline: (payload) => ipcRenderer.invoke('export-inline', payload),

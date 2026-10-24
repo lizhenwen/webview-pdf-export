@@ -20,7 +20,10 @@
         <input id="url" type="text" placeholder="输入网址，回车打开" spellcheck="false" autocomplete="off" />
         <button id="go" type="submit">打开</button>
       </form>
-      <button id="sample" type="button">示例页</button>
+      <div class="history-wrap">
+        <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history">历史</button>
+        <div id="history" class="history hidden" hidden></div>
+      </div>
       <p id="status" class="status" aria-live="polite"></p>
     </header>
     <div class="workspace">

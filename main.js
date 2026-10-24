@@ -2,7 +2,6 @@ const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, net, session, shel
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { pathToFileURL, fileURLToPath } = require('url');
 const { classifyDownload } = require('./lib/classify');
 const { safePdfFilename, safeDownloadFilename, filenameFromDisposition } = require('./lib/filenames');
 const { fileIsPdf } = require('./lib/sniff');
@@ -19,6 +18,7 @@ let nextDownloadWaiter = null;
 let currentInline = null;
 let publishTimer = null;
 let pdfStore = null;
+let historyStore = null;
 let captureDir = '';
 
 function captureSession() {
@@ -240,12 +240,30 @@ function popupOptions() {
   };
 }
 
+function isHistoryUrl(url) {
+  if (typeof url !== 'string' || !url || url.length > 16000) return false;
+  if (url === 'about:blank') return false;
+  return /^(https?:\/\/|file:)/i.test(url);
+}
+
+function cleanTitle(title, url) {
+  const text = String(title || '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text || text === url) return '';
+  return text.slice(0, 180);
+}
+
 function attachGuestBehavior(contents) {
   contents.setWindowOpenHandler(({ url }) => {
     if (url && !/^(https?:\/\/|about:blank$)/i.test(url)) return { action: 'deny' };
     return { action: 'allow', overrideBrowserWindowOptions: popupOptions() };
   });
-  contents.on('did-navigate', (_event, url) => onGuestNavigate(url));
+  contents.on('did-navigate', (_event, url) => {
+    onGuestNavigate(url);
+    if (historyStore) historyStore.visit(url, contents.getTitle());
+  });
+  contents.on('page-title-updated', (_event, title) => {
+    if (historyStore) historyStore.rename(contents.getURL(), title);
+  });
 }
 
 function uniquePath(dir, filename) {
@@ -465,10 +483,6 @@ async function saveOpenViewerPdf(filename) {
 }
 
 function downloadUrlToFile(url, dest, options = {}) {
-  if (url.startsWith('file:')) {
-    return fs.promises.copyFile(fileURLToPath(url), dest);
-  }
-
   return new Promise((resolve, reject) => {
     const request = net.request({
       url,
@@ -541,12 +555,9 @@ function downloadUrlToFile(url, dest, options = {}) {
 }
 
 function assertExportUrl(url) {
-  if (typeof url !== 'string' || url.length > 16000) throw new Error('无效地址');
-  if (/^https?:\/\//i.test(url)) return;
-  if (!url.startsWith('file:')) throw new Error('这个地址不能导出');
-  const file = path.resolve(fileURLToPath(url));
-  const root = path.resolve(__dirname, 'sample');
-  if (file !== root && !file.startsWith(`${root}${path.sep}`)) throw new Error('这个地址不能导出');
+  if (typeof url !== 'string' || url.length > 16000 || !/^https?:\/\//i.test(url)) {
+    throw new Error('这个地址不能导出');
+  }
 }
 
 function savedById(id) {
@@ -604,15 +615,24 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.webContents.send('pdf-list', snapshot().map(publicItem));
     win.webContents.send('inline-pdf', currentInline);
+    win.webContents.send('history-list', historyStore.list());
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
 function registerIpc() {
+  ipcMain.handle('list-history', () => historyStore.list());
+  ipcMain.handle('remove-history', (_event, id) => {
+    historyStore.remove(id);
+    return historyStore.list();
+  });
+  ipcMain.handle('clear-history', () => {
+    historyStore.clear();
+    return historyStore.list();
+  });
+
   ipcMain.handle('list-pdfs', () => snapshot().map(publicItem));
   ipcMain.handle('get-inline-pdf', () => currentInline);
-  ipcMain.handle('get-sample-url', () => pathToFileURL(path.join(__dirname, 'sample', 'index.html')).href);
-
   ipcMain.handle('export-pdf', async (event, id) => {
     const record = savedById(id);
     await resolveInside(captureDir, record.savePath);
@@ -801,6 +821,83 @@ function registerIpc() {
   });
 }
 
+class HistoryStore {
+  constructor(file) {
+    this.file = file;
+    this.items = [];
+  }
+
+  load() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      const items = Array.isArray(parsed.items) ? parsed.items : [];
+      this.items = items.filter((item) => item && isHistoryUrl(item.url)).slice(0, 100);
+    } catch {
+      this.items = [];
+    }
+  }
+
+  persist() {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const temp = `${this.file}.${process.pid}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify({ items: this.items }, null, 2));
+    fs.renameSync(temp, this.file);
+  }
+
+  list() {
+    return this.items.map((item) => ({
+      id: item.id,
+      url: item.url,
+      title: item.title,
+      visitedAt: item.visitedAt,
+    }));
+  }
+
+  publish() {
+    broadcast('history-list', this.list());
+  }
+
+  visit(url, title) {
+    if (!isHistoryUrl(url)) return;
+    const id = crypto.createHash('sha256').update(url).digest('hex').slice(0, 16);
+    const previous = this.items.find((item) => item.id === id);
+    const nextTitle = cleanTitle(title, url) || previous?.title || '';
+    const entry = {
+      id,
+      url,
+      title: nextTitle,
+      visitedAt: Date.now(),
+    };
+    this.items = [entry, ...this.items.filter((item) => item.id !== id)].slice(0, 100);
+    this.persist();
+    this.publish();
+  }
+
+  rename(url, title) {
+    if (!isHistoryUrl(url)) return;
+    const id = crypto.createHash('sha256').update(url).digest('hex').slice(0, 16);
+    const entry = this.items.find((item) => item.id === id);
+    const nextTitle = cleanTitle(title, url);
+    if (!entry || !nextTitle || entry.title === nextTitle) return;
+    entry.title = nextTitle;
+    this.persist();
+    this.publish();
+  }
+
+  remove(id) {
+    if (typeof id !== 'string' || !/^[0-9a-f]{16}$/i.test(id)) throw new Error('无效的历史记录');
+    this.items = this.items.filter((item) => item.id !== id);
+    this.persist();
+    this.publish();
+  }
+
+  clear() {
+    this.items = [];
+    this.persist();
+    this.publish();
+  }
+}
+
 class PdfStore {
   constructor(file) {
     this.file = file;
@@ -873,6 +970,8 @@ if (!gotLock) {
     fs.mkdirSync(captureDir, { recursive: true });
     pdfStore = new PdfStore(path.join(app.getPath('userData'), 'captured-pdfs.json'));
     pdfStore.load();
+    historyStore = new HistoryStore(path.join(app.getPath('userData'), 'history.json'));
+    historyStore.load();
     hookSession();
     registerIpc();
     createWindow();

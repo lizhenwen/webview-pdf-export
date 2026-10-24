@@ -4,7 +4,9 @@ const urlInput = document.getElementById('url');
 const backBtn = document.getElementById('back');
 const forwardBtn = document.getElementById('forward');
 const reloadBtn = document.getElementById('reload');
-const sampleBtn = document.getElementById('sample');
+const historyToggle = document.getElementById('history-toggle');
+const historyPanel = document.getElementById('history');
+const historyWrap = document.querySelector('.history-wrap');
 const status = document.getElementById('status');
 const list = document.getElementById('list');
 const inlineBox = document.getElementById('inline');
@@ -12,6 +14,7 @@ const exportAllBtn = document.getElementById('export-all');
 const clearBtn = document.getElementById('clear');
 const toast = document.getElementById('toast');
 
+let historyItems = [];
 let currentItems = [];
 let inlinePdf = null;
 let inlineBusy = false;
@@ -62,7 +65,73 @@ function navigate(raw) {
     showToast('请输入 http 或 https 网址');
     return;
   }
+  openRecordedPage(url);
+}
+
+function openRecordedPage(url) {
+  if (typeof url !== 'string' || !/^(https?:\/\/|file:)/i.test(url)) {
+    showToast('这条记录无法打开');
+    return;
+  }
   withWebview(() => webview.loadURL(url));
+  setHistoryOpen(false);
+}
+
+function setHistoryOpen(open) {
+  historyPanel.classList.toggle('hidden', !open);
+  historyPanel.hidden = !open;
+  historyToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function renderHistory(items) {
+  historyPanel.replaceChildren();
+  const head = document.createElement('div');
+  head.className = 'history-head';
+  const title = document.createElement('strong');
+  title.textContent = '打开过的网页';
+  head.appendChild(title);
+  historyPanel.appendChild(head);
+
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'history-empty';
+    empty.textContent = '还没有记录。打开一个网页后，会出现在这里。';
+    historyPanel.appendChild(empty);
+    return;
+  }
+
+  const listBox = document.createElement('div');
+  listBox.className = 'history-list';
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'history-item';
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'history-open';
+    const name = document.createElement('strong');
+    name.textContent = item.title || hostOf(item.url) || item.url;
+    const meta = document.createElement('span');
+    meta.textContent = `${hostOf(item.url)} · ${formatTime(item.visitedAt)}`;
+    open.append(name, meta);
+    open.addEventListener('click', () => openRecordedPage(item.url));
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'history-remove';
+    remove.textContent = '×';
+    remove.setAttribute('aria-label', '删除这条记录');
+    remove.addEventListener('click', () => run(() => pdfApp.removeHistory(item.id)));
+    row.append(open, remove);
+    listBox.appendChild(row);
+  }
+  historyPanel.appendChild(listBox);
+
+  const foot = document.createElement('div');
+  foot.className = 'history-foot';
+  foot.appendChild(actionButton('清空历史', '', async () => {
+    if (!window.confirm('清空打开过的网页记录？')) return;
+    await pdfApp.clearHistory();
+  }));
+  historyPanel.appendChild(foot);
 }
 
 function formatSize(bytes) {
@@ -199,7 +268,7 @@ function renderList(items) {
   if (!items.length) {
     const empty = document.createElement('p');
     empty.className = 'empty';
-    empty.textContent = '还没有 PDF。在左侧打开会下载 PDF 的网页，或点示例页试一次。';
+    empty.textContent = '还没有 PDF。在左侧打开会下载 PDF 的网页后，文件会出现在这里。';
     list.appendChild(empty);
     return;
   }
@@ -273,10 +342,14 @@ form.addEventListener('submit', (event) => {
 backBtn.addEventListener('click', () => withWebview(() => webview.goBack()));
 forwardBtn.addEventListener('click', () => withWebview(() => webview.goForward()));
 reloadBtn.addEventListener('click', () => withWebview(() => webview.reload()));
-sampleBtn.addEventListener('click', () => run(async () => {
-  const url = await pdfApp.getSampleUrl();
-  withWebview(() => webview.loadURL(url));
-}));
+
+historyToggle.addEventListener('click', () => {
+  setHistoryOpen(historyPanel.hidden);
+});
+
+document.addEventListener('click', (event) => {
+  if (!historyWrap.contains(event.target)) setHistoryOpen(false);
+});
 
 exportAllBtn.addEventListener('click', () => run(async () => {
   const result = await pdfApp.exportAll();
@@ -290,6 +363,7 @@ clearBtn.addEventListener('click', () => run(async () => {
 }));
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') setHistoryOpen(false);
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'l') {
     event.preventDefault();
     urlInput.focus();
@@ -334,6 +408,11 @@ webview.addEventListener('context-menu', (event) => {
   });
 });
 
+pdfApp.on('history-list', (items) => {
+  historyItems = Array.isArray(items) ? items : [];
+  renderHistory(historyItems);
+});
+
 pdfApp.on('pdf-list', (items) => {
   const next = Array.isArray(items) ? items : [];
   if (sameStructure(next, currentItems) && updateDynamic(next)) {
@@ -365,12 +444,19 @@ pdfApp.on('nav-command', (command) => {
 });
 
 renderList([]);
+renderHistory([]);
 run(async () => {
-  const [items, inline] = await Promise.all([pdfApp.listPdfs(), pdfApp.getInlinePdf()]);
+  const [items, inline, history] = await Promise.all([
+    pdfApp.listPdfs(),
+    pdfApp.getInlinePdf(),
+    pdfApp.listHistory(),
+  ]);
   currentItems = Array.isArray(items) ? items : [];
   renderList(currentItems);
   inlinePdf = inline || null;
   renderInline(inlinePdf);
+  historyItems = Array.isArray(history) ? history : [];
+  renderHistory(historyItems);
 });
 syncNav();
 urlInput.focus();

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>网页 PDF</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar">
+      <div class="nav-buttons">
+        <button id="back" type="button" title="后退" aria-label="后退">←</button>
+        <button id="forward" type="button" title="前进" aria-label="前进">→</button>
+        <button id="reload" type="button" title="重新加载" aria-label="重新加载">↻</button>
+      </div>
+      <form id="nav-form">
+        <label class="sr" for="url">网址</label>
+        <input id="url" type="text" placeholder="输入网址，回车打开" spellcheck="false" autocomplete="off" />
+        <button id="go" type="submit">打开</button>
+      </form>
+      <button id="sample" type="button">示例页</button>
+      <p id="status" class="status" aria-live="polite"></p>
+    </header>
+    <div class="workspace">
+      <div class="stage">
+        <webview
+          id="browser"
+          src="about:blank"
+          partition="persist:pdf-webview"
+          allowpopups
+          useragent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ></webview>
+      </div>
+      <aside class="library">
+        <header class="library-head">
+          <p class="eyebrow">WebView 下载</p>
+          <h1>PDF 列表</h1>
+          <p class="hint">网页打开或下载的 PDF 会先留在这里。点「另存为」复制到你选择的位置，列表里的副本仍然保留。</p>
+        </header>
+        <div id="inline" class="inline hidden"></div>
+        <div id="list" class="list"></div>
+        <footer class="library-foot">
+          <button id="export-all" type="button" class="primary" disabled>全部导出</button>
+          <button id="clear" type="button" class="quiet">清空</button>
+        </footer>
+      </aside>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="renderer.js"></script>
+</body>
+</html>

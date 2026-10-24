@@ -1,0 +1,14 @@
+{
+  "name": "webview-pdf-export",
+  "version": "1.0.0",
+  "private": true,
+  "description": "用 webview 打开网页，并把下载到的 PDF 另存为",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test lib/*.test.js"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5"
+  }
+}
